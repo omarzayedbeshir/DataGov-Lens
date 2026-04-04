@@ -10,7 +10,7 @@ pip install -r requirements.txt
 
 # 2. Configure your database
 cp .env.example .env
-# Edit .env with your remote MySQL credentials (e.g. db4free.net)
+# Edit .env with your remote MySQL credentials (DATABASE_URL)
 # Also set a strong SECRET_KEY for JWT signing:
 # python -c "import secrets; print(secrets.token_hex(32))"
 
