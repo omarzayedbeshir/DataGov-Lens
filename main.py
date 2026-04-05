@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers import users, datasets, projects, stats, auth_router
 
+allow_origins=["https://data-gov-react.vercel.app"]
+
 app = FastAPI(
     title="DataGov API",
     description="Backend API for the Data.gov database application (CSCE 2501 - Milestone III)",
