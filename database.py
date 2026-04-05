@@ -7,7 +7,7 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-engine = create_engine(DATABASE_URL, echo=False, connect_args={"ssl-mode": "VERIFY_IDENTITY"})
+engine = create_engine(DATABASE_URL, echo=False, connect_args={"sslmode": "require"})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
