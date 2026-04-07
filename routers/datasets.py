@@ -26,12 +26,13 @@ def get_dataset(uuid: str, db: Session = Depends(get_db)):
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    result = schemas.DatasetDetail.model_validate(dataset)
-    result.tags = [t.Tag for t in dataset.tags]
-    result.topics = [t.Topic for t in dataset.topics]
-    result.files = [schemas.FileOut(Link=f.Link, Format=f.Format) for f in dataset.files]
+    result = schemas.DatasetDetail.model_validate({
+        **dataset.__dict__,
+        "tags":   [t.Tag for t in dataset.tags],
+        "topics": [t.Topic for t in dataset.topics],
+        "files":  [{"Link": f.Link, "Format": f.Format} for f in dataset.files],
+    })
     return result
-
 
 # ── List datasets with optional filters ───────────────────────────────────────
 
