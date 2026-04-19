@@ -9,7 +9,7 @@ from passlib.context import CryptContext
 from database import get_db, get_connection
 
 import os
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production-use-a-long-random-string")
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
@@ -20,11 +20,13 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return password
+    # return pwd_context.hash(password)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return plain == hashed
+    # return pwd_context.verify(plain, hashed)
 
 
 def create_access_token(email: str, expires_delta: Optional[timedelta] = None) -> str:
