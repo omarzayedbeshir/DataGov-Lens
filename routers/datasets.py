@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from pymysql.connections import Connection
 from typing import Optional
 
 from database import get_db
-import models, schemas
+import schemas
 
 router = APIRouter()
 
@@ -11,64 +11,67 @@ router = APIRouter()
 # ── Dataset detail ─────────────────────────────────────────────────────────────
 
 @router.get("/{uuid}", response_model=schemas.DatasetDetail)
-def get_dataset(uuid: str, db: Session = Depends(get_db)):
-    """Get full details for a single dataset."""
-    dataset = (
-        db.query(models.Dataset)
-        .options(
-            joinedload(models.Dataset.tags),
-            joinedload(models.Dataset.topics),
-            joinedload(models.Dataset.files),
-        )
-        .filter(models.Dataset.UUID == uuid)
-        .first()
-    )
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
+def get_dataset(uuid: str, conn: Connection = Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM Dataset WHERE UUID = %s", (uuid,))
+        ds = cur.fetchone()
+        if not ds:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    result = schemas.DatasetDetail.model_validate({
-        **dataset.__dict__,
-        "tags":   [t.Tag for t in dataset.tags],
-        "topics": [t.Topic for t in dataset.topics],
-        "files":  [{"Link": f.Link, "Format": f.Format} for f in dataset.files],
-    })
-    return result
+        cur.execute("SELECT Tag FROM DatasetTags WHERE DatasetUUID = %s", (uuid,))
+        ds["tags"] = [r["Tag"] for r in cur.fetchall()]
+
+        cur.execute("SELECT Topic FROM DatasetTopics WHERE DatasetUUID = %s", (uuid,))
+        ds["topics"] = [r["Topic"] for r in cur.fetchall()]
+
+        cur.execute("SELECT Link, Format FROM File WHERE DatasetUUID = %s", (uuid,))
+        ds["files"] = cur.fetchall()
+
+    return ds
+
 
 # ── List datasets with optional filters ───────────────────────────────────────
 
 @router.get("/", response_model=list[schemas.DatasetBrief])
 def list_datasets(
-    org_type: Optional[str] = Query(None, description="Filter by publisher organization type"),
-    format: Optional[str] = Query(None, description="Filter by file format (e.g. CSV, JSON)"),
-    tag: Optional[str] = Query(None, description="Filter by tag"),
-    limit: int = Query(50, le=200),
-    offset: int = Query(0),
-    db: Session = Depends(get_db),
+    org_type: Optional[str] = Query(None),
+    format:   Optional[str] = Query(None),
+    tag:      Optional[str] = Query(None),
+    limit:    int           = Query(50, le=200),
+    offset:   int           = Query(0),
+    conn: Connection = Depends(get_db),
 ):
-    """
-    List datasets with optional filters:
-    - **org_type**: organization type (federal, state, city, …)
-    - **format**: file format (CSV, JSON, …)
-    - **tag**: dataset tag keyword
-    """
-    query = db.query(models.Dataset)
+    # Build query dynamically based on active filters
+    joins  = ""
+    wheres = []
+    params = []
 
     if org_type:
-        query = (
-            query.join(models.Publisher, models.Dataset.PublisherEmailAddress == models.Publisher.EmailAddress)
-            .filter(models.Publisher.OrganizationType.ilike(f"%{org_type}%"))
-        )
+        joins += " JOIN Publisher p ON p.EmailAddress = d.PublisherEmailAddress"
+        wheres.append("p.OrganizationType LIKE %s")
+        params.append(f"%{org_type}%")
 
     if format:
-        query = (
-            query.join(models.File, models.File.DatasetUUID == models.Dataset.UUID)
-            .filter(models.File.Format.ilike(f"%{format}%"))
-        )
+        joins += " JOIN File f ON f.DatasetUUID = d.UUID"
+        wheres.append("f.Format LIKE %s")
+        params.append(f"%{format}%")
 
     if tag:
-        query = (
-            query.join(models.DatasetTags, models.DatasetTags.DatasetUUID == models.Dataset.UUID)
-            .filter(models.DatasetTags.Tag.ilike(f"%{tag}%"))
-        )
+        joins += " JOIN DatasetTags dt ON dt.DatasetUUID = d.UUID"
+        wheres.append("dt.Tag LIKE %s")
+        params.append(f"%{tag}%")
 
-    return query.offset(offset).limit(limit).all()
+    where_clause = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+    params += [limit, offset]
+
+    query = f"""
+        SELECT DISTINCT d.UUID, d.Name, d.Description, d.AccessLevel, d.Category, d.FirstPublished
+        FROM Dataset d
+        {joins}
+        {where_clause}
+        LIMIT %s OFFSET %s
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        return cur.fetchall()

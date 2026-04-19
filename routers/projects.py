@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from pymysql.connections import Connection
 
 from database import get_db
 from auth import get_current_user
-import models, schemas
+import schemas
 
 router = APIRouter()
 
@@ -13,23 +13,29 @@ router = APIRouter()
 @router.post("/", response_model=schemas.ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(
     payload: schemas.ProjectCreate,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    conn: Connection = Depends(get_db),
 ):
-    """Create a new project for the logged-in user."""
-    existing = db.get(models.Project, (current_user.EmailAddress, payload.Name))
-    if existing:
-        raise HTTPException(status_code=409, detail="A project with this name already exists.")
+    email = current_user["EmailAddress"]
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT Name FROM Project WHERE UserEmailAddress = %s AND Name = %s",
+            (email, payload.Name)
+        )
+        if cur.fetchone():
+            raise HTTPException(status_code=409, detail="A project with this name already exists.")
 
-    project = models.Project(
-        UserEmailAddress=current_user.EmailAddress,
-        Name=payload.Name,
-        Category=payload.Category,
-    )
-    db.add(project)
-    db.commit()
-    db.refresh(project)
-    return project
+        cur.execute(
+            "INSERT INTO Project (UserEmailAddress, Name, Category) VALUES (%s, %s, %s)",
+            (email, payload.Name, payload.Category)
+        )
+        conn.commit()
+
+        cur.execute(
+            "SELECT * FROM Project WHERE UserEmailAddress = %s AND Name = %s",
+            (email, payload.Name)
+        )
+        return cur.fetchone()
 
 
 # ── Add dataset to project ─────────────────────────────────────────────────────
@@ -38,31 +44,43 @@ def create_project(
 def add_dataset_to_project(
     project_name: str,
     payload: schemas.UsageCreate,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    conn: Connection = Depends(get_db),
 ):
-    """Add a dataset usage entry to one of the logged-in user's projects."""
-    project = db.get(models.Project, (current_user.EmailAddress, project_name))
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found.")
+    email = current_user["EmailAddress"]
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT Name FROM Project WHERE UserEmailAddress = %s AND Name = %s",
+            (email, project_name)
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Project not found.")
 
-    dataset = db.get(models.Dataset, payload.DatasetUUID)
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
+        cur.execute("SELECT UUID FROM Dataset WHERE UUID = %s", (payload.DatasetUUID,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    existing = db.get(models.ProjectDatasets, (current_user.EmailAddress, project_name, payload.DatasetUUID))
-    if existing:
-        raise HTTPException(status_code=409, detail="Dataset already added to this project.")
+        cur.execute(
+            """SELECT * FROM ProjectDatasets
+               WHERE UserEmailAddress = %s AND ProjectName = %s AND DatasetUUID = %s""",
+            (email, project_name, payload.DatasetUUID)
+        )
+        if cur.fetchone():
+            raise HTTPException(status_code=409, detail="Dataset already added to this project.")
 
-    usage = models.ProjectDatasets(
-        UserEmailAddress=current_user.EmailAddress,
-        ProjectName=project_name,
-        DatasetUUID=payload.DatasetUUID,
-    )
-    db.add(usage)
-    db.commit()
-    db.refresh(usage)
-    return usage
+        cur.execute(
+            """INSERT INTO ProjectDatasets (UserEmailAddress, ProjectName, DatasetUUID)
+               VALUES (%s, %s, %s)""",
+            (email, project_name, payload.DatasetUUID)
+        )
+        conn.commit()
+
+        cur.execute(
+            """SELECT * FROM ProjectDatasets
+               WHERE UserEmailAddress = %s AND ProjectName = %s AND DatasetUUID = %s""",
+            (email, project_name, payload.DatasetUUID)
+        )
+        return cur.fetchone()
 
 
 # ── List datasets in a project ─────────────────────────────────────────────────
@@ -70,20 +88,23 @@ def add_dataset_to_project(
 @router.get("/{project_name}/datasets", response_model=list[schemas.DatasetBrief])
 def list_project_datasets(
     project_name: str,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    conn: Connection = Depends(get_db),
 ):
-    """List all datasets used in one of the logged-in user's projects."""
-    project = db.get(models.Project, (current_user.EmailAddress, project_name))
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found.")
-
-    return (
-        db.query(models.Dataset)
-        .join(models.ProjectDatasets, models.ProjectDatasets.DatasetUUID == models.Dataset.UUID)
-        .filter(
-            models.ProjectDatasets.UserEmailAddress == current_user.EmailAddress,
-            models.ProjectDatasets.ProjectName == project_name,
+    email = current_user["EmailAddress"]
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT Name FROM Project WHERE UserEmailAddress = %s AND Name = %s",
+            (email, project_name)
         )
-        .all()
-    )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        cur.execute(
+            """SELECT d.UUID, d.Name, d.Description, d.AccessLevel, d.Category, d.FirstPublished
+               FROM Dataset d
+               JOIN ProjectDatasets pd ON pd.DatasetUUID = d.UUID
+               WHERE pd.UserEmailAddress = %s AND pd.ProjectName = %s""",
+            (email, project_name)
+        )
+        return cur.fetchall()

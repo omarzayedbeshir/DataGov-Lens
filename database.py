@@ -1,33 +1,28 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+import pymysql
+import pymysql.cursors
 from dotenv import load_dotenv
 import os
-import ssl
-import base64
-import tempfile
-
-ca_cert_b64 = os.environ["DB_CA_CERT"]
-ca_cert_pem = base64.b64decode(ca_cert_b64)
-
-with tempfile.NamedTemporaryFile(delete=False, suffix=".pem") as f:
-    f.write(ca_cert_pem)
-    ca_cert_path = f.name
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DB_CONFIG = {
+    "host":     os.getenv("DB_HOST", "localhost"),
+    "port":     int(os.getenv("DB_PORT", 3306)),
+    "user":     os.getenv("DB_USER", "root"),
+    "password": os.getenv("DB_PASSWORD", "password"),
+    "database": os.getenv("DB_NAME", "DataGovApp"),
+    "cursorclass": pymysql.cursors.DictCursor,
+    "charset": "utf8mb4",
+}
 
-engine = create_engine(DATABASE_URL, echo=False, connect_args={"ssl": {"ca": ca_cert_path}})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-
-class Base(DeclarativeBase):
-    pass
+def get_connection():
+    return pymysql.connect(**DB_CONFIG)
 
 
 def get_db():
-    db = SessionLocal()
+    conn = get_connection()
     try:
-        yield db
+        yield conn
     finally:
-        db.close()
+        conn.close()
